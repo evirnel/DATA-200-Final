@@ -1,0 +1,334 @@
+---
+title: "Alzheimers"
+output: html_document
+date: "2024-10-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+
+alzheimers_data <- read_csv('~/Downloads/Alzheimer_s_Disease_and_Healthy_Aging_Data_20241019.csv')
+
+(head(alzheimers_data))
+```
+
+```{r}
+
+# Creating our new dataset 
+# Filtering the datset by the selected questions and then grouping them by location(state) and removing the null value
+# Repeat process for each column
+
+activity <- alzheimers_data %>%
+  filter(Question == "Percentage of older adults who have not had any leisure time physical activity in the past month") %>%
+  group_by(LocationDesc) %>%
+  summarise(Activity = mean(as.numeric(Data_Value), na.rm = TRUE))
+
+diet <- alzheimers_data %>%
+  filter(Question == "Percentage of older adults who are eating 2 or more fruits daily" | 
+         Question == "Percentage of older adults who are eating 3 or more vegetables daily") %>%
+  group_by(LocationDesc) %>%
+  summarise(Diet = mean(as.numeric(Data_Value), na.rm = TRUE))
+
+smoking <- alzheimers_data %>%
+  filter(Question == "Percentage of older adults who have smoked at least 100 cigarettes in their entire life and still smoke every day or some days") %>%
+  group_by(LocationDesc) %>%
+  summarise(Smoking = mean(as.numeric(Data_Value), na.rm = TRUE))
+
+drinking <- alzheimers_data %>%
+  filter(Question == "Percentage of older adults who reported binge drinking within the past 30 days") %>%
+  group_by(LocationDesc) %>%
+  summarise(Drinking = mean(as.numeric(Data_Value), na.rm = TRUE))
+
+sleep <- alzheimers_data %>%
+  filter(Question == "Percentage of older adults getting sufficient sleep (>6 hours)") %>%
+  group_by(LocationDesc) %>%
+  summarise(Sleep = mean(as.numeric(Data_Value), na.rm = TRUE))
+
+risk <- alzheimers_data %>%
+  filter(Question == "Percentage of older adults who are experiencing frequent mental distress" |
+         Question == "Percentage of older adults who reported subjective cognitive decline or memory loss that interferes with their ability to engage in social activities or household chores" |
+         Question == "Percentage of older adults who self-reported that their health is \"fair\" or \"poor\"" |
+         Question == "Percentage of older adults ever told they have arthritis" |
+         Question == "Percentage of older adults who have ever been told by a health professional that they have high blood pressure") %>%
+  group_by(LocationDesc) %>%
+  summarise(Risk = mean(as.numeric(Data_Value), na.rm = TRUE))
+
+# Combine all summaries by the location (state)
+alzheimers_data <- activity %>%
+  left_join(diet, by = "LocationDesc") %>%
+  left_join(smoking, by = "LocationDesc") %>%
+  left_join(drinking, by = "LocationDesc") %>%
+  left_join(sleep, by = "LocationDesc") %>%
+  left_join(risk, by = "LocationDesc")
+
+alzheimers_data <- alzheimers_data %>%
+  rename(State = LocationDesc)
+
+# Remove any rows that are not one of the 50 states
+ alzheimers_data<- alzheimers_data %>%
+   filter(!(State %in% c("Guam", "Midwest", "Northeast", "Puerto Rico", "South", "United States, DC & Territories", "Virgin Islands", "West", "District of Columbia")))
+
+# Display 
+print(alzheimers_data)
+
+```
+
+
+```{r}
+# Calculating our Lifestyle Score (aggregating all the lifstyle choices, making sure that the higher the score, the better overall lifestyle decisions)
+
+alzheimers_data$lifestyle_score <- with(alzheimers_data, 
+  ((100 - Activity) +  
+  (100 - Smoking) +  
+  (100 - Drinking) +  
+  Sleep +
+  Diet) / 500 * 100
+)
+
+# Put it in a model and then print results
+model <- lm(Risk ~ lifestyle_score, data = alzheimers_data)
+summary(model)
+```
+
+```{r}
+# Map based on overall lifestlye score (standarized)
+
+# Normalize function
+normalize <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+
+# For lifestyle score map
+map_data <- alzheimers_data[, c("State", "lifestyle_score")]
+map_data$normalized_lifestyle <- normalize(map_data$lifestyle_score)
+map_data$state <- state.abb[match(map_data$State, state.name)]
+
+plot_usmap(data = map_data, values = "normalized_lifestyle", color = "black") + 
+  scale_fill_continuous(
+    "midnightblue", high = "cadetblue1", name = "Lifestyle Choices") + theme(legend.position = "bottom") +
+  labs(title = "Combined Lifestyle Choices by State")
+```
+
+```{r}
+# Map based on Risk Factor (standarized)
+map_data_risk <- alzheimers_data[, c("State", "Risk")]
+map_data_risk$normalized_risk <- normalize(map_data_risk$Risk)
+map_data_risk$state <- state.abb[match(map_data_risk$State, state.name)]
+
+# Create the map with a teal color theme
+plot_usmap(data = map_data_risk, values = "normalized_risk", color = "black") + 
+  scale_fill_continuous(
+    low = "orange1", high = "red4", name = "Risk") + theme(legend.position = "bottom") +
+  labs(title = "Alzheimer's Risk Factor by State")
+```
+
+
+
+```{r}
+# PCA
+pca_data <- alzheimers_data[, c("Activity", "Diet", "Smoking", "Drinking", "Sleep")]
+
+# Make sure it is numeric an then run PCA
+pca_data <- as.data.frame(lapply(pca_data, as.numeric))
+pca_results <- prcomp(pca_data, scale = TRUE)
+
+# Display
+summary(pca_results)
+
+print(pca_results$rotation)
+biplot(pca_results, scale = 0)
+
+#Create a scree plot to show the most impactful PC in terms of varaince explained
+ggplot(data.frame(PC = 1:length(var_explained), Variance = var_explained), aes(x = PC, y = Variance)) +
+  geom_line() +
+  geom_point() +
+  xlab("Principal Component") +
+  ylab("Proportion of Variance Explained") +
+  ggtitle("Scree Plot")
+```
+
+
+```{r}
+
+# Make sure we have the main lifstyle choice columns
+pca_data <- alzheimers_data[, c("Activity", "Diet", "Smoking", "Drinking", "Sleep")]
+
+# Extract PC scores
+# Needed to add the PCA data, so we can use PC1 and PC2 in the clustering 
+pc_scores <- as.data.frame(pca_results$x)
+pca_data <- cbind(pca_data, pc_scores)
+pca_data$State <- alzheimers_data$State
+
+# Check to make sure
+print(pca_data)
+```
+```{r}
+# Elbow method to figure out how many clusters to use
+
+# Apply the k-means algorithm to the first two principal components
+# Getting the Within Sum of squares of the clusters (WSS)
+wss <- function(k) kmeans(pca_data[, c("PC1", "PC2")], k, nstart = 10)$tot.withinss
+
+# Compute WSS for 10 clusters to give a range on how many clusters we should se
+k_values <- 1:10
+wss_values <- sapply(k_values, wss)
+
+# Create elbow plot and then show it
+ggplot(data.frame(k = k_values, wss = wss_values), aes(x = k, y = wss)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Number of Clusters", y = "Total Sum of Squares", title = "Elbow Method") +
+  theme_minimal()
+
+
+```
+
+```{r}
+# Perform k-means clustering on PC1 and PC2
+set.seed(123)  
+kmeans_result <- kmeans(pca_data[, c("PC1", "PC2")], centers = 5)  # 5 clusters based on elbow method
+
+# Add cluster information to the dataframe
+pca_data$Cluster <- as.factor(kmeans_result$cluster)
+
+# Create a scatter plot based 
+p <- ggplot(pca_data, aes(x = PC1, y = PC2, color = Cluster, label = State)) +
+  geom_point(size = 3) +
+  geom_text(hjust = 1.1, vjust = 1.1, size = 3, check_overlap = TRUE) +
+  scale_color_manual(
+    values = c("1" = "#4682B4",  "2" = "#FF8C00","3" = "#FFD700","4" = "#006400","5" = "#8B0000"), name = "Cluster") +
+  labs(
+    title = "State Clusters based on PC1 and PC2",
+    subtitle = "PC1 and PC2 explain 75.58% of variance in lifestyle factors",
+    x = "PC1 (Higher Physical Activity, Less Smoking, & Better Diet)",
+    y = "PC2 (Higher Alcohol Consumption & Inadequate Sleep)",
+    caption = "Clusters determined by k-means on PC1 and PC2"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+# Display 
+print(p)
+```
+```{r}
+# Then map this data on US Map based on state and cluster
+map_data <- pca_data[, c("State", "Cluster")]
+map_data$state <- state.abb[match(map_data$State, state.name)]
+
+plot_usmap(data = map_data, values = "Cluster", color = "black") + 
+  scale_fill_manual(
+    values = c("1" = "#4682B4",   
+               "2" = "#FF8C00",   
+               "3" = "#FFD700", 
+               "4" = "#006400",  
+               "5" = "#8B0000"),
+    name = "Cluster"
+  ) +
+  theme(legend.position = "right") +
+  labs(title = "State Clusters based on Lifestyle Factors",
+       subtitle = "Clusters determined by k-means on PC1 and PC2")
+```
+```{r}
+# Load the Random Forest Library
+library(randomForest)
+
+# Include lifestyle factors and Risk as well
+rf_data <- na.omit(alzheimers_data[, c("Activity", "Diet", "Smoking", "Drinking", "Sleep", "Risk")])
+
+set.seed(123)  
+train_index <- sample(1:nrow(rf_data), 0.7 * nrow(rf_data))
+train_data <- rf_data[train_index, ]
+test_data <- rf_data[-train_index, ]
+
+# Train the Random Forest Model
+rf_model <- randomForest(Risk ~ Activity + Diet + Smoking + Drinking + Sleep, 
+                         data = train_data, 
+                         ntree = 500, 
+                         importance = TRUE)
+
+# Then input th test data on theh trained  Random Forest Model
+predictions <- predict(rf_model, newdata = test_data)
+
+# Evaluate with MSE and RSME and past results
+mse <- mean((test_data$Risk - predictions)^2)
+rmse <- sqrt(mse)
+print(paste("RMSE:", rmse))
+
+# Get and print variable importance
+importance(rf_model)
+varImpPlot(rf_model)
+```
+
+
+```{r}
+#Forward Step-wise Selection Model
+
+# Employing forward step0wise selection to select the best predictors:
+
+# create a null model with 0 predictors
+null_model <- lm(Risk ~ 1, data = alzheimers_data)
+
+# get the total number of predictors (excluding Y, "Risk")
+predictors <- colnames(df)
+predictors <- setdiff(predictors, "Risk")
+p <- length(predictors)
+
+# some set up to keep track of things
+best_model <- null_model
+selected_predictors <- character()
+
+# add a new predictor one at a time
+for (k in 0:(p-1)) {
+  models <- list()
+  
+  # a. consider p - k models that augment M by one predictor
+  for (predictor in predictors) {
+    # create a model with this predictor
+    model <- update(best_model, as.formula(paste(". ~ . +", predictor)))
+    # add it to this round of models
+    models[[predictor]] <- model
+    summary(new_best_model)$r.squared
+  }
+  
+  # b. choose the best one of these models (maximize R^2)
+  best_index <- which.max(sapply(models, FUN = function(x) {summary(x)$r.squared}))
+  new_best_model <- models[[best_index]]
+  
+  # c. stopping condition
+  new_r2 <- summary(new_best_model)$r.squared
+  old_r2 <- summary(best_model)$r.squared
+  # if new best R^2 smaller than prev best, stop iterating
+  if (new_r2 >= old_r2) {
+    best_model <- new_best_model
+    this_pred <- names(models)[best_index]
+    # add this predictor to list and remove it from future iterations
+    selected_predictors <- c(selected_predictors, predictors[best_index])
+    predictors <- setdiff(predictors, this_pred)
+  } else {
+    break
+  }
+}
+
+summary(best_model)
+
+print(selected_predictors)
+```
+
+```{r}
+#Checking for multicollinearity between our 5 variables 
+
+library(car)
+vif(best_model)
+vif_values <- (best_model)
+print(vif_values)
+
+```
+
+
